@@ -8,7 +8,7 @@ so the factory it is deployed from has no meaning on any other chain.
 This deploys, in order:
     1. LMCallback blueprint (ERC-5202, 3-byte preamble - matches the
        `code_offset=3` the factory passes to `create_from_blueprint`)
-    2. LMCallbackFactory(owner, blueprint)
+    2. LMCallbackFactory(owner, blueprint, LlamaLend V2 factory)
 
 The factory is deployed unpaused and owned by the Ownership DAO, which is the
 only account that can rotate the blueprint or pause deployments afterwards.
@@ -50,6 +50,7 @@ from eth_utils import to_checksum_address
 
 CHAIN_ID = 1
 MAINNET_DAO = "0x40907540d8a6C65c637785e8f8B742ae6b0b9968"  # Ownership DAO
+MAINNET_LEND_FACTORY = "0x8f6B56EC5ddF1F2691a1059f1D3cd97Ac9EaB0bd"
 
 # --- Contract sources ---
 LM_CALLBACK = "curve_stablecoin/lm_callback/LMCallback.vy"
@@ -106,6 +107,7 @@ def _deploy(
     deployer: str,
     dry_run: bool,
     owner: str,
+    lend_factory: str,
     report_path: Path,
     smoke_amm: str | None,
 ) -> None:
@@ -120,6 +122,7 @@ def _deploy(
     factory = boa.load_partial(LM_CALLBACK_FACTORY).deploy(
         owner,
         lm_callback_blueprint.address,
+        lend_factory,
     )
 
     # The factory reverts on a zero owner/blueprint, so these only guard against
@@ -127,6 +130,9 @@ def _deploy(
     assert to_checksum_address(factory.owner()) == to_checksum_address(owner)
     assert to_checksum_address(factory.lm_callback_blueprint()) == to_checksum_address(
         lm_callback_blueprint.address
+    )
+    assert to_checksum_address(factory.LEND_FACTORY()) == to_checksum_address(
+        lend_factory
     )
     assert not factory.paused()
     assert factory.get_lm_callback_count() == 0
@@ -151,6 +157,7 @@ def _deploy(
         "contracts": contracts,
         "params": {
             "owner": to_checksum_address(owner),
+            "lend_factory": to_checksum_address(lend_factory),
         },
     }
 
@@ -161,6 +168,7 @@ def _deploy(
     for name, address in contracts.items():
         print(f"  {name}: {address}")
     print("Owner:", to_checksum_address(owner))
+    print("LlamaLend V2 factory:", to_checksum_address(lend_factory))
     print("Report:", report_path)
     print()
     print(
@@ -195,6 +203,11 @@ def main() -> None:
         help="Factory owner, allowed to rotate the blueprint and pause (default: DAO)",
     )
     parser.add_argument(
+        "--lend-factory",
+        default=MAINNET_LEND_FACTORY,
+        help="Trusted LlamaLend V2 factory",
+    )
+    parser.add_argument(
         "--smoke-amm",
         help="AMM to smoke-test the blueprint against (dry-run only)",
     )
@@ -212,6 +225,7 @@ def main() -> None:
 
     report_path = Path(args.report_path)
     owner = to_checksum_address(args.owner)
+    lend_factory = to_checksum_address(args.lend_factory)
 
     if args.dry_run:
         smoke_amm = _resolve_smoke_amm(args.smoke_amm)
@@ -221,6 +235,7 @@ def main() -> None:
                 deployer,
                 dry_run=True,
                 owner=owner,
+                lend_factory=lend_factory,
                 report_path=report_path,
                 smoke_amm=smoke_amm,
             )
@@ -232,6 +247,7 @@ def main() -> None:
                 acct.address,
                 dry_run=False,
                 owner=owner,
+                lend_factory=lend_factory,
                 report_path=report_path,
                 smoke_amm=None,
             )

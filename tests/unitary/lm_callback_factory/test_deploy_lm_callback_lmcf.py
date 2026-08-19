@@ -2,7 +2,7 @@ import boa
 import pytest
 
 from tests.utils.constants import ZERO_ADDRESS
-from tests.utils.deployers import DUMMY_LM_CALLBACK_DEPLOYER, compiler_args_default
+from tests.utils.deployers import compiler_args_default
 
 # Re-enters `deploy_lm_callback` from inside the blueprint constructor - the exact
 # hand-off of control the `@nonreentrant` lock exists to close. `revert_on_failure`
@@ -11,8 +11,19 @@ from tests.utils.deployers import DUMMY_LM_CALLBACK_DEPLOYER, compiler_args_defa
 REENTRANT_CALLBACK = """
 # pragma version 0.4.3
 
+interface IAMM:
+    def coins(_i: uint256) -> address: view
+
+FACTORY: immutable(address)
+AMM: public(immutable(address))
+COLLATERAL_TOKEN: public(immutable(address))
+
 @deploy
 def __init__(_amm: address):
+    FACTORY = msg.sender
+    AMM = _amm
+    COLLATERAL_TOKEN = staticcall IAMM(_amm).coins(1)
+
     success: bool = False
     response: Bytes[32] = b""
     success, response = raw_call(
@@ -22,6 +33,11 @@ def __init__(_amm: address):
         revert_on_failure=False,
     )
     assert not success, "reentrancy was not blocked"
+
+@external
+@view
+def factory() -> address:
+    return FACTORY
 """
 
 
@@ -32,13 +48,15 @@ def test_deploy_returns_the_deployed_callback(factory, dummy_amm):
     assert boa.env.get_code(lm_callback) != b""
 
 
-def test_deploy_uses_blueprint_and_forwards_amm(factory, dummy_amm):
+def test_deploy_uses_blueprint_and_forwards_amm(
+    factory, dummy_amm, lm_callback_deployer
+):
     lm_callback = factory.deploy_lm_callback(dummy_amm)
+    callback = lm_callback_deployer.at(lm_callback)
 
-    # Vyper appends immutables to the runtime bytecode, so an identical direct
-    # deployment proves both the blueprint used and the forwarded `amm` argument
-    reference = DUMMY_LM_CALLBACK_DEPLOYER.deploy(dummy_amm)
-    assert boa.env.get_code(lm_callback) == boa.env.get_code(reference.address)
+    assert callback.factory() == factory.address
+    assert callback.AMM() == dummy_amm.address
+    assert callback.COLLATERAL_TOKEN() == dummy_amm.coins(1)
 
 
 def test_deploy_registers_the_callback(factory, dummy_amm):
@@ -56,7 +74,7 @@ def test_deploy_emits_event(
     lm_callback = factory.deploy_lm_callback(dummy_amm, sender=deployer)
 
     log = single_factory_event(factory, "DeployedLMCallback")
-    assert log.amm == dummy_amm
+    assert log.amm == dummy_amm.address
     assert log.deployer == deployer
     assert log.blueprint == lm_callback_blueprint.address
     assert log.lm_callback == lm_callback
@@ -71,8 +89,8 @@ def test_deploy_is_permissionless(factory, dummy_amm, owner):
     assert factory.is_valid_lm_callback(lm_callback)
 
 
-def test_deploy_appends_in_order(factory):
-    amms = [boa.env.generate_address(f"amm_{i}") for i in range(3)]
+def test_deploy_appends_in_order(factory, make_amm):
+    amms = [make_amm() for _ in range(3)]
 
     lm_callbacks = [factory.deploy_lm_callback(amm) for amm in amms]
 
@@ -83,14 +101,15 @@ def test_deploy_appends_in_order(factory):
         assert factory.is_valid_lm_callback(lm_callback)
 
 
-def test_deploy_allows_several_callbacks_per_amm(factory, dummy_amm):
-    """Nothing dedupes by AMM: the same market can back more than one callback."""
+def test_deploy_allows_multiple_callbacks_for_amm(factory, dummy_amm):
     first = factory.deploy_lm_callback(dummy_amm)
     second = factory.deploy_lm_callback(dummy_amm)
 
     assert first != second
     assert factory.is_valid_lm_callback(first)
     assert factory.is_valid_lm_callback(second)
+    assert factory.amm_for_callback(first) == dummy_amm.address
+    assert factory.amm_for_callback(second) == dummy_amm.address
 
 
 def test_deploy_reverts_when_paused(paused_factory, dummy_amm):
@@ -133,6 +152,27 @@ def __init__(_amm: address):
     assert factory.get_lm_callback_count() == 0
 
 
+def test_deploy_rejects_callback_that_fails_identity_readback(
+    deploy_factory, owner, dummy_amm
+):
+    malformed_blueprint = boa.loads_partial(
+        """
+# pragma version 0.4.3
+
+@deploy
+def __init__(_amm: address):
+    pass
+""",
+        compiler_args=compiler_args_default,
+    ).deploy_as_blueprint()
+    factory = deploy_factory(owner, malformed_blueprint)
+
+    with boa.reverts():
+        factory.deploy_lm_callback(dummy_amm)
+
+    assert factory.get_lm_callback_count() == 0
+
+
 def test_deploy_is_not_reentrant(deploy_factory, owner, dummy_amm):
     reentrant_blueprint = boa.loads_partial(
         REENTRANT_CALLBACK, compiler_args=compiler_args_default
@@ -147,8 +187,8 @@ def test_deploy_is_not_reentrant(deploy_factory, owner, dummy_amm):
 
 
 @pytest.mark.parametrize("amm", [ZERO_ADDRESS, "0x" + "11" * 20])
-def test_deploy_does_not_validate_the_amm(factory, amm):
-    """The factory takes the AMM on trust; it never checks it is a real market."""
-    lm_callback = factory.deploy_lm_callback(amm)
+def test_deploy_rejects_non_market_amm(factory, amm):
+    with boa.reverts("not a LlamaLend AMM"):
+        factory.deploy_lm_callback(amm)
 
-    assert factory.is_valid_lm_callback(lm_callback)
+    assert factory.get_lm_callback_count() == 0

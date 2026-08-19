@@ -1,33 +1,79 @@
-"""
-Unit fixtures for `LMCallbackFactory`.
-
-The factory only cares that its blueprint deploys something taking a single AMM
-address, so these tests use `DummyLMCallback` rather than the real `LMCallback`
-(which additionally reaches out to CRV, the GaugeController and the Minter).
-That keeps the suite standalone: no protocol deployment, no market fixtures.
-"""
+"""Standalone unit fixtures for `LMCallbackFactory`."""
 
 import boa
 import pytest
 
 from tests.utils import filter_logs
 from tests.utils.deployers import (
-    DUMMY_LM_CALLBACK_DEPLOYER,
     LM_CALLBACK_FACTORY_DEPLOYER,
     compiler_args_default,
 )
 
-# A second callback shape, distinguishable from `DummyLMCallback` by its runtime
-# code, so a deployment can be attributed to one blueprint or the other
-OTHER_CALLBACK = """
+MOCK_LEND_FACTORY = """
 # pragma version 0.4.3
 
+flag ContractType:
+    VAULT
+    CONTROLLER
+    AMM
+
+struct ContractInfo:
+    market_index: uint256
+    contract_type: ContractType
+
+check_contract: public(HashMap[address, ContractInfo])
+
+@external
+def register_amm(_amm: address):
+    self.check_contract[_amm] = ContractInfo(
+        market_index=1,
+        contract_type=ContractType.AMM,
+    )
+"""
+
+DUMMY_AMM = """
+# pragma version 0.4.3
+
+COLLATERAL_TOKEN: immutable(address)
+
+@deploy
+def __init__(_collateral_token: address):
+    COLLATERAL_TOKEN = _collateral_token
+
+@external
+@view
+def coins(_i: uint256) -> address:
+    assert _i < 2
+    if _i == 1:
+        return COLLATERAL_TOKEN
+    return empty(address)
+"""
+
+DUMMY_CALLBACK = """
+# pragma version 0.4.3
+
+interface IAMM:
+    def coins(_i: uint256) -> address: view
+
+FACTORY: immutable(address)
 AMM: public(immutable(address))
-MARKER: public(constant(uint256)) = 42
+COLLATERAL_TOKEN: public(immutable(address))
 
 @deploy
 def __init__(_amm: address):
+    FACTORY = msg.sender
     AMM = _amm
+    COLLATERAL_TOKEN = staticcall IAMM(_amm).coins(1)
+
+@external
+@view
+def factory() -> address:
+    return FACTORY
+"""
+
+# A second valid callback shape, distinguishable by its runtime code.
+OTHER_CALLBACK = DUMMY_CALLBACK + """
+MARKER: public(constant(uint256)) = 42
 """
 
 
@@ -42,14 +88,38 @@ def non_owner():
 
 
 @pytest.fixture
-def dummy_amm():
-    """`DummyLMCallback` only stores the AMM, so it never has to be a contract."""
-    return boa.env.generate_address("dummy_amm")
+def market_factory():
+    return boa.loads_partial(
+        MOCK_LEND_FACTORY, compiler_args=compiler_args_default
+    ).deploy()
 
 
 @pytest.fixture
-def lm_callback_blueprint():
-    return DUMMY_LM_CALLBACK_DEPLOYER.deploy_as_blueprint()
+def make_amm(market_factory):
+    amm_deployer = boa.loads_partial(DUMMY_AMM, compiler_args=compiler_args_default)
+
+    def _make_amm():
+        collateral_token = boa.env.generate_address("collateral_token")
+        amm = amm_deployer.deploy(collateral_token)
+        market_factory.register_amm(amm)
+        return amm
+
+    return _make_amm
+
+
+@pytest.fixture
+def dummy_amm(make_amm):
+    return make_amm()
+
+
+@pytest.fixture
+def lm_callback_deployer():
+    return boa.loads_partial(DUMMY_CALLBACK, compiler_args=compiler_args_default)
+
+
+@pytest.fixture
+def lm_callback_blueprint(lm_callback_deployer):
+    return lm_callback_deployer.deploy_as_blueprint()
 
 
 @pytest.fixture
@@ -61,11 +131,11 @@ def other_blueprint():
 
 
 @pytest.fixture
-def deploy_factory():
+def deploy_factory(market_factory):
     """Deploy a factory with explicit arguments, for tests that vary them."""
 
-    def _deploy_factory(owner, blueprint):
-        return LM_CALLBACK_FACTORY_DEPLOYER.deploy(owner, blueprint)
+    def _deploy_factory(owner, blueprint, lend_factory=market_factory):
+        return LM_CALLBACK_FACTORY_DEPLOYER.deploy(owner, blueprint, lend_factory)
 
     return _deploy_factory
 

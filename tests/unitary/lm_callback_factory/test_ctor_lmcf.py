@@ -4,11 +4,12 @@ from tests.utils import filter_logs
 from tests.utils.constants import ZERO_ADDRESS
 
 
-def test_ctor(deploy_factory, owner, lm_callback_blueprint):
+def test_ctor(deploy_factory, owner, lm_callback_blueprint, market_factory):
     factory = deploy_factory(owner, lm_callback_blueprint)
 
     assert factory.owner() == owner
     assert factory.lm_callback_blueprint() == lm_callback_blueprint.address
+    assert factory.LEND_FACTORY() == market_factory.address
     assert not factory.paused()
     assert factory.get_lm_callback_count() == 0
 
@@ -47,3 +48,10 @@ def test_ctor_reverts_if_owner_is_zero(deploy_factory, lm_callback_blueprint):
 def test_ctor_reverts_if_blueprint_is_zero(deploy_factory, owner):
     with boa.reverts():
         deploy_factory(owner, ZERO_ADDRESS)
+
+
+def test_ctor_reverts_if_lend_factory_is_zero(
+    deploy_factory, owner, lm_callback_blueprint
+):
+    with boa.reverts():
+        deploy_factory(owner, lm_callback_blueprint, ZERO_ADDRESS)

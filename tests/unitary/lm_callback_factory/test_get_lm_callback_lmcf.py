@@ -1,9 +1,9 @@
 import boa
 
 
-def test_get_lm_callback_returns_deployment_order(factory):
+def test_get_lm_callback_returns_deployment_order(factory, make_amm):
     lm_callbacks = [
-        factory.deploy_lm_callback(boa.env.generate_address(f"amm_{i}"))
+        factory.deploy_lm_callback(make_amm())
         for i in range(3)
     ]
 

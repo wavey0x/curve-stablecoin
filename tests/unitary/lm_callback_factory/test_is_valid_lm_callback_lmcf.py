@@ -1,13 +1,14 @@
 import boa
 
 from tests.utils.constants import ZERO_ADDRESS
-from tests.utils.deployers import DUMMY_LM_CALLBACK_DEPLOYER
 
 
 def test_valid_for_deployed_callback(factory, dummy_amm):
     lm_callback = factory.deploy_lm_callback(dummy_amm)
 
     assert factory.is_valid_lm_callback(lm_callback)
+    assert factory.is_valid_gauge(lm_callback)
+    assert factory.amm_for_callback(lm_callback) == dummy_amm.address
 
 
 def test_invalid_for_unknown_addresses(factory):
@@ -16,11 +17,16 @@ def test_invalid_for_unknown_addresses(factory):
     assert not factory.is_valid_lm_callback(factory.address)
 
 
-def test_invalid_for_directly_deployed_callback(factory, dummy_amm):
-    """Bypassing the factory means no registration, even for identical code."""
-    lm_callback = DUMMY_LM_CALLBACK_DEPLOYER.deploy(dummy_amm)
+def test_invalid_for_directly_deployed_callback(
+    factory, dummy_amm, lm_callback_deployer
+):
+    """A callback commits to its deployer, but only the registry confers trust."""
+    deployer = boa.env.generate_address("direct_deployer")
+    callback = lm_callback_deployer.deploy(dummy_amm, sender=deployer)
 
-    assert not factory.is_valid_lm_callback(lm_callback.address)
+    assert callback.factory() == deployer
+    assert not factory.is_valid_lm_callback(callback.address)
+    assert not factory.is_valid_gauge(callback.address)
 
 
 def test_invalid_across_factories(
@@ -34,6 +40,7 @@ def test_invalid_across_factories(
 
     assert factory.is_valid_lm_callback(lm_callback)
     assert not other_factory.is_valid_lm_callback(lm_callback)
+    assert not other_factory.is_valid_gauge(lm_callback)
 
 
 def test_stays_valid_after_blueprint_change(factory, dummy_amm, owner, other_blueprint):

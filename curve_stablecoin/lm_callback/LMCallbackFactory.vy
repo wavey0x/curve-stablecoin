@@ -10,6 +10,8 @@
 """
 
 from curve_stablecoin.interfaces import IAMM
+from curve_stablecoin.interfaces import ILendFactory
+from curve_stablecoin.interfaces import ILMCallback
 from curve_stablecoin.interfaces import ILMCallbackFactory
 
 implements: ILMCallbackFactory
@@ -31,8 +33,9 @@ exports: (
 
 MAX_LM_CALLBACKS: constant(uint256) = 10**18
 
+LEND_FACTORY: public(immutable(ILendFactory))
 lm_callback_blueprint: public(address)
-is_valid_lm_callback: public(HashMap[address, bool])
+amm_for_callback: public(HashMap[address, address])
 
 _lm_callbacks: DynArray[address, MAX_LM_CALLBACKS]
 
@@ -41,17 +44,21 @@ _lm_callbacks: DynArray[address, MAX_LM_CALLBACKS]
 def __init__(
     _owner: address,
     _blueprint: address,
+    _lend_factory: ILendFactory,
 ):
     """
-    @notice Factory which creates LM Callbacks for LlamaLend/crvUSD markets from a blueprint
+    @notice Factory which creates LM Callbacks for LlamaLend V2 markets from a blueprint
     @param _owner Owner of the factory, allowed to update the blueprint (ideally DAO)
     @param _blueprint Address of the LM Callback blueprint
+    @param _lend_factory LlamaLend V2 factory whose AMMs may receive callbacks
     """
     ownable.__init__()
     pausable.__init__()
     assert _owner != empty(address)  # dev: zero owner
+    assert _lend_factory.address != empty(address)  # dev: zero lend factory
     ownable._transfer_ownership(_owner)
 
+    LEND_FACTORY = _lend_factory
     self._set_blueprint(_blueprint)
 
 
@@ -68,6 +75,9 @@ def deploy_lm_callback(_amm: IAMM) -> address:
     """
     pausable._require_not_paused()
 
+    contract_info: ILendFactory.ContractInfo = staticcall LEND_FACTORY.check_contract(_amm.address)
+    assert contract_info.contract_type == ILendFactory.ContractType.AMM, "not a LlamaLend AMM"
+
     lm_callback_blueprint: address = self.lm_callback_blueprint
 
     lm_callback: address = create_from_blueprint(
@@ -76,7 +86,12 @@ def deploy_lm_callback(_amm: IAMM) -> address:
         code_offset=3,
     )
 
-    self.is_valid_lm_callback[lm_callback] = True
+    callback: ILMCallback = ILMCallback(lm_callback)
+    assert staticcall callback.factory() == self, "wrong factory"
+    assert staticcall callback.AMM() == _amm.address, "wrong AMM"
+    assert staticcall callback.COLLATERAL_TOKEN() == staticcall _amm.coins(1), "wrong collateral"
+
+    self.amm_for_callback[lm_callback] = _amm.address
     self._lm_callbacks.append(lm_callback)
 
     log ILMCallbackFactory.DeployedLMCallback(
@@ -87,6 +102,24 @@ def deploy_lm_callback(_amm: IAMM) -> address:
     )
 
     return lm_callback
+
+
+@external
+@view
+def is_valid_lm_callback(_lm_callback: address) -> bool:
+    """
+    @notice Whether an LM Callback was deployed for a verified LlamaLend AMM
+    """
+    return self.amm_for_callback[_lm_callback] != empty(address)
+
+
+@external
+@view
+def is_valid_gauge(_gauge: address) -> bool:
+    """
+    @notice Gauge-factory compatible alias for `is_valid_lm_callback`
+    """
+    return self.amm_for_callback[_gauge] != empty(address)
 
 
 @external

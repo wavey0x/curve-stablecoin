@@ -7,7 +7,7 @@ constructor args are read from the report that script writes.
 Verifies, with their constructor args:
     1. LMCallback blueprint   -- ctor args live in each deployed instance, so the
                                  blueprint itself is submitted with none
-    2. LMCallbackFactory      -- ctor: (owner, blueprint)
+    2. LMCallbackFactory      -- ctor: (owner, blueprint, LlamaLend V2 factory)
 
 The callbacks the factory deploys are blueprint copies of 1., so verifying the
 blueprint covers them and they are not submitted individually.
@@ -321,6 +321,7 @@ def main() -> None:
     blueprint_addr = deployment["contracts"]["lm_callback_blueprint"]
     factory_addr = deployment["contracts"]["lm_callback_factory"]
     owner = deployment["params"]["owner"]
+    lend_factory = deployment["params"]["lend_factory"]
 
     def vy_json(rel: str, optimize: str | None = None) -> dict:
         return _build_vyper_json(PROJECT_ROOT / rel, optimize=optimize)
@@ -343,7 +344,10 @@ def main() -> None:
             vy_json(LM_CALLBACK_FACTORY_SRC),
             "vyper:0.4.3",
             "vyper-json",
-            encode(["address", "address"], [owner, blueprint_addr]).hex(),
+            encode(
+                ["address", "address", "address"],
+                [owner, blueprint_addr, lend_factory],
+            ).hex(),
             "1",
         ),
     ]

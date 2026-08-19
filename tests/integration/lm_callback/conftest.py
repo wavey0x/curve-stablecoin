@@ -28,6 +28,12 @@ def collateral_decimals():
     return 18
 
 
+# The production callback factory admits AMMs from LlamaLend V2's LendFactory.
+@pytest.fixture(scope="module")
+def market_type():
+    return "lending"
+
+
 # Borrowed decimals don't matter
 @pytest.fixture(scope="module")
 def borrowed_decimals():
@@ -104,7 +110,7 @@ def minter(admin, crv, gauge_controller):
 
 
 @pytest.fixture(scope="module")
-def lm_callback_factory(admin, minter):
+def lm_callback_factory(admin, minter, factory):
     """
     Factory that deploys the callbacks under test.
 
@@ -115,7 +121,7 @@ def lm_callback_factory(admin, minter):
     """
     with boa.env.prank(admin):
         blueprint = LM_CALLBACK_DEPLOYER.deploy_as_blueprint()
-        return LM_CALLBACK_FACTORY_DEPLOYER.deploy(admin, blueprint)
+        return LM_CALLBACK_FACTORY_DEPLOYER.deploy(admin, blueprint, factory)
 
 
 @pytest.fixture(scope="module")

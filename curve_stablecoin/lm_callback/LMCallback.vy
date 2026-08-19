@@ -50,6 +50,7 @@ MINTER: constant(IMinter) = IMinter(0xd061D61a4d941c39E5453435B6345Dc261C2fcE0)
 
 AMM: public(immutable(IAMM))
 COLLATERAL_TOKEN: public(immutable(IERC20))
+FACTORY: immutable(address)
 
 # Set the first time this contract is seen as the AMM's configured callback
 attached: public(bool)
@@ -101,6 +102,7 @@ def __init__(_amm: IAMM):
     @notice LMCallback constructor
     @param _amm The address of the AMM
     """
+    FACTORY = msg.sender
     AMM = _amm
     COLLATERAL_TOKEN = IERC20(staticcall AMM.coins(1))
     assert staticcall COLLATERAL_TOKEN.decimals() == 18, "collateral decimals must be 18"
@@ -108,6 +110,15 @@ def __init__(_amm: IAMM):
     self.future_epoch_time = extcall CRV.future_epoch_time_write()
     self.inflation_rate = staticcall CRV.rate()
     self.I_rpc.t = block.timestamp
+
+
+@external
+@view
+def factory() -> address:
+    """
+    @notice Factory which deployed this LM Callback
+    """
+    return FACTORY
 
 
 @internal

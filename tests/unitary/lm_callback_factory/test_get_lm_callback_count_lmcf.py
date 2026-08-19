@@ -5,10 +5,10 @@ def test_count_starts_at_zero(factory):
     assert factory.get_lm_callback_count() == 0
 
 
-def test_count_increments_per_deployment(factory):
+def test_count_increments_per_deployment(factory, make_amm):
     for i in range(3):
         assert factory.get_lm_callback_count() == i
-        factory.deploy_lm_callback(boa.env.generate_address(f"amm_{i}"))
+        factory.deploy_lm_callback(make_amm())
         assert factory.get_lm_callback_count() == i + 1
 
 

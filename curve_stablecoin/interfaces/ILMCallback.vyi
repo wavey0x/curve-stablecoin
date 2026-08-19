@@ -43,6 +43,12 @@ struct IntegralRPU:
 # so that this interface stays free of imports that would cycle back into it.
 @view
 @external
+def factory() -> address:
+    ...
+
+
+@view
+@external
 def AMM() -> address:
     ...
 

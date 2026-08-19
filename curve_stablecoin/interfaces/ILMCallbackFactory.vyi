@@ -36,7 +36,25 @@ def lm_callback_blueprint() -> address:
 
 @view
 @external
+def LEND_FACTORY() -> address:
+    ...
+
+
+@view
+@external
 def is_valid_lm_callback(_lm_callback: address) -> bool:
+    ...
+
+
+@view
+@external
+def is_valid_gauge(_gauge: address) -> bool:
+    ...
+
+
+@view
+@external
+def amm_for_callback(_lm_callback: address) -> address:
     ...
 
 
