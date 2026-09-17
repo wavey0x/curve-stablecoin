@@ -33,9 +33,7 @@ def test_deployment(tmp_path):
             pinata_token=None,
         )
         report = json.loads(report_path.read_text())
-        adapter = boa.load_partial(deploy.REUSD_CRVUSD_ADAPTER).at(
-            report["reusd_adapter"]
-        )
+        adapter = boa.load_partial(deploy.REUSD_ADAPTER).at(report["reusd_adapter"])
         oracle = boa.load_partial(deploy.CHAIN_ORACLE).at(report["price_oracle"])
         amm = boa.load_partial(deploy.AMM_SRC).at(report["amm"])
 

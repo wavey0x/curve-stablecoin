@@ -44,9 +44,7 @@ from eth_abi import encode
 STABLESWAP_NG_LP_ORACLE_SRC = (
     "curve_stablecoin/price_oracles/v2/StableSwapNGLPOracle.vy"
 )
-REUSD_CRVUSD_ADAPTER_SRC = (
-    "curve_stablecoin/price_oracles/v2/adapters/ReusdCrvUSDAdapter.vy"
-)
+REUSD_ADAPTER_SRC = "curve_stablecoin/price_oracles/v2/adapters/ReusdCrvUSDAdapter.vy"
 CHAIN_ORACLE_SRC = "curve_stablecoin/price_oracles/v2/ChainOracle.vy"
 HYPERBOLIC_MP_SRC = "curve_stablecoin/mpolicies/v2/HyperbolicMP.vy"
 
@@ -378,8 +376,8 @@ def main() -> None:
         (
             reusd_adapter_addr,
             "ReusdCrvUSDAdapter (Vyper 0.4.3)",
-            f"{REUSD_CRVUSD_ADAPTER_SRC}:ReusdCrvUSDAdapter",
-            vy_json(REUSD_CRVUSD_ADAPTER_SRC),
+            f"{REUSD_ADAPTER_SRC}:ReusdCrvUSDAdapter",
+            vy_json(REUSD_ADAPTER_SRC),
             "vyper:0.4.3",
             "vyper-json",
             "",

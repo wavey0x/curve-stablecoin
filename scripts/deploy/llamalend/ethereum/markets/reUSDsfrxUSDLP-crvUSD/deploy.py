@@ -142,9 +142,7 @@ MAX_SANE_PRICE = 105 * 10**16  # 1.05 USD
 
 # --- Contract sources ---
 STABLESWAP_NG_LP_ORACLE = "curve_stablecoin/price_oracles/v2/StableSwapNGLPOracle.vy"
-REUSD_CRVUSD_ADAPTER = (
-    "curve_stablecoin/price_oracles/v2/adapters/ReusdCrvUSDAdapter.vy"
-)
+REUSD_ADAPTER = "curve_stablecoin/price_oracles/v2/adapters/ReusdCrvUSDAdapter.vy"
 CHAIN_ORACLE = "curve_stablecoin/price_oracles/v2/ChainOracle.vy"
 HYPERBOLIC_MP = "curve_stablecoin/mpolicies/v2/HyperbolicMP.vy"
 LEND_FACTORY = "curve_stablecoin/lending/LendFactory.vy"
@@ -374,7 +372,7 @@ def _deploy(
     lp_oracle = boa.load_partial(STABLESWAP_NG_LP_ORACLE).deploy(
         LP_POOL, LP_COIN_IDX, EMA_TIME
     )
-    reusd_adapter = boa.load_partial(REUSD_CRVUSD_ADAPTER).deploy()
+    reusd_adapter = boa.load_partial(REUSD_ADAPTER).deploy()
     oracle = boa.load_partial(CHAIN_ORACLE).deploy(
         [lp_oracle.address, reusd_adapter.address, AGG]
     )
