@@ -11,10 +11,10 @@ Per market this deploys, in order:
          a. StableSwapNGLPOracle(reUSD/sfrxUSD pool, reUSD idx, ema_time)
               -> LP price quoted in reUSD, with the pool's virtual price
                  asymmetrically EMA-dampened against single-block pumps.
-         b. CurvePoolOracle(reUSD/scrvUSD pool, base=reUSD, quote=scrvUSD)
-              -> reUSD price in crvUSD.  scrvUSD is rate-adjusted by the pool,
-                 and `price_oracle` ignores stored_rates, so the quote side of
-                 this leg is the *underlying* crvUSD, not scrvUSD.
+         b. ReusdCrvUSDAdapter()
+              -> min(1e18, ReusdOracle.priceAsCrvusd()), in crvUSD per reUSD.
+                 Reuses the existing redemption-based feed and preserves its
+                 redemption floor, which can mask market losses. No added EMA.
          c. AGG (already deployed crvUSD stable aggregator)
               -> crvUSD/USD, which is what makes the result USD-denominated.
        ChainOracle multiplies the legs:
@@ -32,15 +32,12 @@ creates the gauge and the callback here, but neither emits anything on its own:
 the GaugeController has to register them and the Configurator has to attach the
 callback to the market, which is what --create-vote asks the DAO for.
 
-Coin layout of the two pools (both are 2-coin; `coins(2)` reverts):
+Coin layout of the collateral pool (2 coins; `coins(2)` reverts):
 
     reUSD/sfrxUSD  0xed785Af6...  coin 0 = reUSD, coin 1 = sfrxUSD
-    reUSD/scrvUSD  0xc522A660...  coin 0 = reUSD, coin 1 = scrvUSD
-
-so LP_COIN_IDX = 0, BRIDGE_BASE_IDX = 0 and BRIDGE_QUOTE_IDX = 1.  Those indexes
-are hardcoded below to keep them reviewable, and asserted against `coins(i)` on
-the live pools before anything is deployed, so a wrong pool address or a
-reordered pool fails loudly rather than mis-pricing the market.
+so LP_COIN_IDX = 0. The layout is asserted against `coins(i)` before deployment.
+The reUSD adapter fixes its feed address in the contract; the feed obtains its
+market price from the reUSD/scrvUSD pool and applies the redemption floor.
 
 HyperbolicMP binds its Controller as an immutable set in the constructor, but
 the Controller is only created inside factory.create() (which itself needs the
@@ -108,26 +105,18 @@ CHAIN_ID = 1
 
 # --- Tokens ---
 CRVUSD = "0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E"  # borrowed
-REUSD = "0x57aB1E0003F623289CD798B1824Be09a793e4Bec"  # shared coin of both pools
+REUSD = "0x57aB1E0003F623289CD798B1824Be09a793e4Bec"  # LP price numeraire
 SFRXUSD = "0xcf62F905562626CfcDD2261162a51fd02Fc9c5b6"  # collateral pool coin
-SCRVUSD = "0x0655977FEb2f289A4aB78af67BAB0d17aAb84367"  # bridge pool coin
 
-# --- Pools and their coin layout ---
+# --- Collateral pool and its coin layout ---
 # Collateral pool. Its LP token *is* the pool, and that is what is collateralised.
 LP_POOL = "0xed785Af60bEd688baa8990cD5c4166221599A441"  # reUSD/sfrxUSD
 LP_POOL_COINS = {0: REUSD, 1: SFRXUSD}
-# Bridge pool, used only to price reUSD in crvUSD.
-BRIDGE_POOL = "0xc522A6606BBA746d7960404F22a3DB936B6F4F50"  # reUSD/scrvUSD
-BRIDGE_POOL_COINS = {0: REUSD, 1: SCRVUSD}
 
-# --- Coin indexes into the pools above (asserted against the chain before use) ---
+# --- LP quote index (coin layout asserted against the chain before use) ---
 # LP price is quoted in the underlying asset of this coin; reUSD is a plain ERC20,
 # so the LP token comes out priced in reUSD.
 LP_COIN_IDX = 0  # reUSD
-# reUSD priced in the underlying of scrvUSD, i.e. crvUSD: `price_oracle` ignores
-# stored_rates, so the quote side of this leg is crvUSD and not scrvUSD.
-BRIDGE_BASE_IDX = 0  # reUSD
-BRIDGE_QUOTE_IDX = 1  # scrvUSD
 
 # crvUSD stable aggregator, already deployed (same address CrvUSDAggregatorWrapper pins).
 AGG = "0x18672b1b0c623a30089A280Ed9256379fb0E4E62"
@@ -153,7 +142,9 @@ MAX_SANE_PRICE = 105 * 10**16  # 1.05 USD
 
 # --- Contract sources ---
 STABLESWAP_NG_LP_ORACLE = "curve_stablecoin/price_oracles/v2/StableSwapNGLPOracle.vy"
-CURVE_POOL_ORACLE = "curve_stablecoin/price_oracles/v2/CurvePoolOracle.vy"
+REUSD_CRVUSD_ADAPTER = (
+    "curve_stablecoin/price_oracles/v2/adapters/ReusdCrvUSDAdapter.vy"
+)
 CHAIN_ORACLE = "curve_stablecoin/price_oracles/v2/ChainOracle.vy"
 HYPERBOLIC_MP = "curve_stablecoin/mpolicies/v2/HyperbolicMP.vy"
 LEND_FACTORY = "curve_stablecoin/lending/LendFactory.vy"
@@ -277,7 +268,7 @@ def _check_pool_coins(pool_addr: str, expected: dict[int, str], label: str) -> N
     Assert a pool's coins sit at the indexes hardcoded above.
 
     The whole oracle chain hinges on this layout - reUSD has to be the coin the
-    LP oracle quotes in *and* the coin the bridge oracle prices - so it is
+    LP oracle quotes in and the coin the reUSD adapter prices - so it is
     checked against the live pool before anything is deployed.
     """
     pool = boa.loads_abi(POOL_ABI).at(pool_addr)
@@ -375,27 +366,24 @@ def _deploy(
     factory = boa.load_partial(LEND_FACTORY).at(contracts["factory"])
     configurator = boa.load_partial(CONFIGURATOR).at(contracts["configurator"])
 
-    # 0. Verify the hardcoded coin layout against the live pools before
+    # 0. Verify the hardcoded coin layout against the live pool before
     #    deploying anything.
     _check_pool_coins(LP_POOL, LP_POOL_COINS, "LP pool (reUSD/sfrxUSD)")
-    _check_pool_coins(BRIDGE_POOL, BRIDGE_POOL_COINS, "Bridge pool (reUSD/scrvUSD)")
 
     # 1. Oracle stack: LP/reUSD -> reUSD/crvUSD -> crvUSD/USD, chained.
     lp_oracle = boa.load_partial(STABLESWAP_NG_LP_ORACLE).deploy(
         LP_POOL, LP_COIN_IDX, EMA_TIME
     )
-    bridge_oracle = boa.load_partial(CURVE_POOL_ORACLE).deploy(
-        BRIDGE_POOL, BRIDGE_BASE_IDX, BRIDGE_QUOTE_IDX
-    )
+    reusd_adapter = boa.load_partial(REUSD_CRVUSD_ADAPTER).deploy()
     oracle = boa.load_partial(CHAIN_ORACLE).deploy(
-        [lp_oracle.address, bridge_oracle.address, AGG]
+        [lp_oracle.address, reusd_adapter.address, AGG]
     )
 
     lp_price = lp_oracle.price()
-    bridge_price = bridge_oracle.price()
+    reusd_price = reusd_adapter.price()
     price = oracle.price()
     print(f"  LP/reUSD    : {lp_price / 10**18:.6f}")
-    print(f"  reUSD/crvUSD: {bridge_price / 10**18:.6f}")
+    print(f"  reUSD/crvUSD: {reusd_price / 10**18:.6f} (capped redemption feed)")
     print(f"  LP/USD      : {price / 10**18:.6f}")
     assert MIN_SANE_PRICE <= price <= MAX_SANE_PRICE, (
         f"oracle price {price / 10**18:.6f} USD outside the sanity band "
@@ -517,7 +505,7 @@ def _deploy(
         "factory": factory.address,
         "configurator": configurator.address,
         "lp_oracle": lp_oracle.address,
-        "bridge_oracle": bridge_oracle.address,
+        "reusd_adapter": reusd_adapter.address,
         "price_oracle": oracle.address,
         "monetary_policy": monetary_policy.address,
         "vault": vault_addr,
@@ -532,9 +520,7 @@ def _deploy(
             "collateral_token": LP_POOL,
             "lp_pool": LP_POOL,
             "lp_coin_idx": LP_COIN_IDX,
-            "bridge_pool": BRIDGE_POOL,
-            "bridge_base_idx": BRIDGE_BASE_IDX,
-            "bridge_quote_idx": BRIDGE_QUOTE_IDX,
+            "reusd_feed": reusd_adapter.REUSD_FEED(),
             "reusd": REUSD,
             "agg": AGG,
             "ema_time": EMA_TIME,
@@ -556,7 +542,7 @@ def _deploy(
             "gauge_weight": GAUGE_WEIGHT,
             "initial_price": price,
             "initial_lp_price": lp_price,
-            "initial_bridge_price": bridge_price,
+            "initial_reusd_price": reusd_price,
         },
     }
 
@@ -565,7 +551,7 @@ def _deploy(
 
     print("Market:", report["market"])
     print("LP Oracle:", lp_oracle.address)
-    print("Bridge Oracle:", bridge_oracle.address)
+    print("reUSD Adapter:", reusd_adapter.address)
     print("Price Oracle:", oracle.address, f"(price={price / 10**18:.6f})")
     print("Monetary Policy:", monetary_policy.address)
     print("Vault:", vault_addr)
